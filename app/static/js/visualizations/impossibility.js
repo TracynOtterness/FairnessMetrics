@@ -68,6 +68,7 @@ class ImpossibilityViz {
       // Diff Value
       const diff = Math.abs(metric.valA - metric.valB).toFixed(1);
       const diffTag = document.createElement("div");
+      diffTag.className = "diff-tag"; // Add class for styling
       diffTag.style.marginLeft = "auto";
       diffTag.style.fontSize = "0.85rem";
       diffTag.style.color = diff < 1 ? "#4cc9f0" : "#e0e0e0"; // Highlight if balanced

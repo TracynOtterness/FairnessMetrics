@@ -10,10 +10,12 @@ class BellCurveViz {
     this.colors = {
       popA: {
         primary: "#4361ee",
+        neg: "#4cc9f0", // Cyan
         bg: "rgba(67, 97, 238, 0.2)",
       },
       popB: {
         primary: "#f72585",
+        neg: "#faa307", // Orange
         bg: "rgba(247, 37, 133, 0.2)",
       },
       text: "#a0a0b0",
@@ -21,9 +23,43 @@ class BellCurveViz {
       threshold: "#fff",
     };
 
+    // Layout State
+    this.visible = {
+      popAPos: true,
+      popANeg: true,
+      popBPos: true,
+      popBNeg: true,
+    };
+
     // Handle resizing
     this.resize();
     window.addEventListener("resize", () => this.resize());
+
+    // Setup Toggles
+    this.setupToggles();
+  }
+
+  setupToggles() {
+    const toggles = {
+      ".pop-a-pos": "popAPos",
+      ".pop-a-neg": "popANeg",
+      ".pop-b-pos": "popBPos",
+      ".pop-b-neg": "popBNeg",
+    };
+
+    Object.entries(toggles).forEach(([selector, key]) => {
+      const el = document.querySelector(`.legend-item ${selector}`);
+      if (el && el.parentElement) {
+        el.parentElement.style.cursor = "pointer";
+        el.parentElement.addEventListener("click", () => {
+          this.visible[key] = !this.visible[key];
+          // Visual feedback (opacity)
+          el.parentElement.style.opacity = this.visible[key] ? "1" : "0.5";
+
+          if (this.lastData) this.update(this.lastData);
+        });
+      }
+    });
   }
 
   resize() {
@@ -59,11 +95,39 @@ class BellCurveViz {
     const xMin = 0,
       xMax = 100;
     // Find max y to scale vertically
+    // Populate y values scaled by prevalence
+    // We need to scale the Y values we receive from the backend by the actual prevalence
+    // The backend returns PDF values which integrate to 1.
+    // To show relative population sizes, we multiply by prevalence.
+
+    // Pop A (Pos) * Prev A
+    const curveAPos = this.scaleCurve(
+      data.population_a.curves.positive,
+      data.population_a.prevalence
+    );
+    // Pop A (Neg) * (1 - Prev A)
+    const curveANeg = this.scaleCurve(
+      data.population_a.curves.negative,
+      1 - data.population_a.prevalence
+    );
+
+    // Pop B (Pos) * Prev B
+    const curveBPos = this.scaleCurve(
+      data.population_b.curves.positive,
+      data.population_b.prevalence
+    );
+    // Pop B (Neg) * (1 - Prev B)
+    const curveBNeg = this.scaleCurve(
+      data.population_b.curves.negative,
+      1 - data.population_b.prevalence
+    );
+
+    // Find max y to scale vertically (now based on scaled values)
     const allY = [
-      ...data.population_a.curves.positive.y,
-      ...data.population_a.curves.negative.y,
-      ...data.population_b.curves.positive.y,
-      ...data.population_b.curves.negative.y,
+      ...curveAPos.y,
+      ...curveANeg.y,
+      ...curveBPos.y,
+      ...curveBNeg.y,
     ];
     const yMax = Math.max(...allY) * 1.1; // Add 10% headroom
 
@@ -78,45 +142,57 @@ class BellCurveViz {
     // Draw curves
     // Order: Pop A Neg, Pop A Pos, Pop B Neg, Pop B Pos
 
-    // Population A Negative (dashed)
-    this.drawCurve(
-      data.population_a.curves.negative,
-      this.colors.popA.primary,
-      true,
-      mapX,
-      mapY
-    );
+    // Draw curves if visible
+    // Order: Negatives first (background), then Positives
 
-    // Population A Positive (solid)
-    this.drawCurve(
-      data.population_a.curves.positive,
-      this.colors.popA.primary,
-      false,
-      mapX,
-      mapY
-    );
+    // Population A Negative
+    if (this.visible.popANeg) {
+      this.drawCurve(curveANeg, this.colors.popA.neg, false, mapX, mapY);
+    }
+    // Population B Negative
+    if (this.visible.popBNeg) {
+      this.drawCurve(curveBNeg, this.colors.popB.neg, false, mapX, mapY);
+    }
 
-    // Population B Negative (dashed)
-    this.drawCurve(
-      data.population_b.curves.negative,
-      this.colors.popB.primary,
-      true,
-      mapX,
-      mapY
-    );
+    // Population A Positive
+    if (this.visible.popAPos) {
+      this.drawCurve(curveAPos, this.colors.popA.primary, false, mapX, mapY);
+    }
+    // Population B Positive
+    if (this.visible.popBPos) {
+      this.drawCurve(curveBPos, this.colors.popB.primary, false, mapX, mapY);
+    }
 
-    // Population B Positive (solid)
-    this.drawCurve(
-      data.population_b.curves.positive,
-      this.colors.popB.primary,
-      false,
-      mapX,
-      mapY
-    );
+    // Draw Threshold Lines
+    const thresholdAX = mapX(data.threshold_a);
+    const thresholdBX = mapX(data.threshold_b);
 
-    // Draw Threshold Line
-    const thresholdX = mapX(data.threshold);
-    this.drawThreshold(thresholdX, height, padding);
+    // If they are the same (or very close), just draw one white one
+    if (Math.abs(thresholdAX - thresholdBX) < 1) {
+      this.drawThreshold(
+        thresholdAX,
+        height,
+        padding,
+        this.colors.threshold,
+        "Threshold"
+      );
+    } else {
+      // Draw separate colored lines
+      this.drawThreshold(
+        thresholdAX,
+        height,
+        padding,
+        this.colors.popA.primary,
+        "Thresh A"
+      );
+      this.drawThreshold(
+        thresholdBX,
+        height,
+        padding,
+        this.colors.popB.primary,
+        "Thresh B"
+      );
+    }
   }
 
   drawAxes(width, height, padding) {
@@ -179,26 +255,33 @@ class BellCurveViz {
     );
     ctx.lineTo(mapX(curveData.x[0]), height - paddingBottom);
     ctx.fillStyle = color;
-    ctx.globalAlpha = isDashed ? 0.05 : 0.1; // Lighter fill for negative
+    ctx.globalAlpha = isDashed ? 0.2 : 0.4; // Distinct colors allow higher opacity
     ctx.fill();
     ctx.globalAlpha = 1.0;
     ctx.setLineDash([]);
   }
 
-  drawThreshold(x, height, padding) {
+  drawThreshold(x, height, padding, color, label) {
     const ctx = this.ctx;
 
     ctx.beginPath();
-    ctx.strokeStyle = this.colors.threshold;
+    ctx.strokeStyle = color;
     ctx.lineWidth = 2;
     ctx.moveTo(x, padding.top);
     ctx.lineTo(x, height - padding.bottom);
     ctx.stroke();
 
     // Add label
-    ctx.fillStyle = this.colors.threshold;
+    ctx.fillStyle = color;
     ctx.font = "bold 12px Inter";
     ctx.textAlign = "center";
-    ctx.fillText("Threshold", x, padding.top - 5);
+    ctx.fillText(label, x, padding.top - 5);
+  }
+
+  scaleCurve(curve, scalar) {
+    return {
+      x: curve.x,
+      y: curve.y.map((val) => val * scalar),
+    };
   }
 }

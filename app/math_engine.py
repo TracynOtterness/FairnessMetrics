@@ -136,7 +136,8 @@ def compute_all_metrics(params: dict) -> dict:
 
     Args:
         params: Dictionary containing:
-            - threshold: Classification threshold
+            - threshold_a: Classification threshold for Population A
+            - threshold_b: Classification threshold for Population B
             - pop_a_mu_pos, pop_a_sigma_pos: Population A positive distribution
             - pop_a_mu_neg, pop_a_sigma_neg: Population A negative distribution
             - pop_a_prevalence: Population A base rate
@@ -147,7 +148,8 @@ def compute_all_metrics(params: dict) -> dict:
     Returns:
         Dictionary with complete metrics for both populations
     """
-    threshold = params["threshold"]
+    threshold_a = params["threshold_a"]
+    threshold_b = params["threshold_b"]
 
     # Population A
     rates_a = compute_rates(
@@ -155,7 +157,7 @@ def compute_all_metrics(params: dict) -> dict:
         params["pop_a_sigma_pos"],
         params["pop_a_mu_neg"],
         params["pop_a_sigma_neg"],
-        threshold,
+        threshold_a,
     )
     pv_a = compute_predictive_values(
         rates_a["tpr"], rates_a["fpr"], rates_a["tnr"], rates_a["fnr"], params["pop_a_prevalence"]
@@ -170,7 +172,7 @@ def compute_all_metrics(params: dict) -> dict:
         params["pop_b_sigma_pos"],
         params["pop_b_mu_neg"],
         params["pop_b_sigma_neg"],
-        threshold,
+        threshold_b,
     )
     pv_b = compute_predictive_values(
         rates_b["tpr"], rates_b["fpr"], rates_b["tnr"], rates_b["fnr"], params["pop_b_prevalence"]
@@ -189,8 +191,41 @@ def compute_all_metrics(params: dict) -> dict:
         "negative": generate_distribution_points(params["pop_b_mu_neg"], params["pop_b_sigma_neg"]),
     }
 
+    # Overall Confusion Matrix
+    cm_overall = {
+        "tp": cm_a["tp"] + cm_b["tp"],
+        "fn": cm_a["fn"] + cm_b["fn"],
+        "fp": cm_a["fp"] + cm_b["fp"],
+        "tn": cm_a["tn"] + cm_b["tn"],
+        "n_positive": cm_a["n_positive"] + cm_b["n_positive"],
+        "n_negative": cm_a["n_negative"] + cm_b["n_negative"],
+        "population_size": cm_a["population_size"] + cm_b["population_size"],
+    }
+
+    # Calculate Overall Rates/PVs for display if needed
+    overall_tpr = cm_overall["tp"] / cm_overall["n_positive"] if cm_overall["n_positive"] > 0 else 0
+    overall_fpr = cm_overall["fp"] / cm_overall["n_negative"] if cm_overall["n_negative"] > 0 else 0
+
+    # Simple overall PVs
+    total_predicted_pos = cm_overall["tp"] + cm_overall["fp"]
+    total_predicted_neg = cm_overall["tn"] + cm_overall["fn"]
+    overall_ppv = cm_overall["tp"] / total_predicted_pos if total_predicted_pos > 0 else 0
+    overall_npv = cm_overall["tn"] / total_predicted_neg if total_predicted_neg > 0 else 0
+
+    cm_overall_metrics = {
+        "rates": {
+            "tpr": overall_tpr,
+            "fpr": overall_fpr,
+            "fnr": 1 - overall_tpr,
+            "tnr": 1 - overall_fpr,
+        },
+        "predictive_values": {"ppv": overall_ppv, "npv": overall_npv},
+        "confusion_matrix": cm_overall,
+    }
+
     return {
-        "threshold": threshold,
+        "threshold_a": threshold_a,
+        "threshold_b": threshold_b,
         "population_a": {
             "rates": rates_a,
             "predictive_values": pv_a,
@@ -205,6 +240,7 @@ def compute_all_metrics(params: dict) -> dict:
             "curves": curves_b,
             "prevalence": params["pop_b_prevalence"],
         },
+        "overall": cm_overall_metrics,
         "comparison": {
             "ppv_diff": abs(pv_a["ppv"] - pv_b["ppv"]),
             "npv_diff": abs(pv_a["npv"] - pv_b["npv"]),
@@ -213,4 +249,88 @@ def compute_all_metrics(params: dict) -> dict:
             "tpr_diff": abs(rates_a["tpr"] - rates_b["tpr"]),
             "tnr_diff": abs(rates_a["tnr"] - rates_b["tnr"]),
         },
+    }
+
+
+def optimize_thresholds(params: dict) -> dict:
+    """
+    Find thresholds that minimize weighted error cost using a vectorized grid search.
+
+    Cost Function:
+        Cost = (fp_weight * total_FP) + (fn_weight * total_FN)
+
+    The function performs a grid search over potential thresholds (0 to 100, step 0.5).
+    It uses vectorized NumPy/SciPy operations for efficiency, calculating the cost
+    for all candidate thresholds simultaneously.
+
+    Args:
+        params: Dictionary containing:
+            - fp_weight: Cost weight for False Positives (default 1.0)
+            - fn_weight: Cost weight for False Negatives (default 1.0)
+            - constraint_equal: If True, forces threshold_a == threshold_b (default True)
+            - Population distribution parameters (mu, sigma, prevalence for A and B)
+
+    Returns:
+        Dictionary with optimal thresholds and the minimum cost found.
+    """
+    fp_weight = params.get("fp_weight", 1.0)
+    fn_weight = params.get("fn_weight", 1.0)
+    constraint_equal = params.get("constraint_equal", True)
+
+    # 1. Define Search Space
+    # Search from 0 to 100 with step 0.5
+    steps = np.arange(0, 100.5, 0.5)
+
+    # Create coordinate grids for threshold candidates
+    if constraint_equal:
+        # If constrained, thresholds must be equal (t_a = t_b)
+        t_a_grid = steps
+        t_b_grid = steps
+    else:
+        # If independent, search the full 2D space (t_a x t_b)
+        # meshgrid creates 2D arrays of all possible combinations
+        t_a_grid, t_b_grid = np.meshgrid(steps, steps)
+        t_a_grid = t_a_grid.flatten()
+        t_b_grid = t_b_grid.flatten()
+
+    # 2. Calculate Population Sizes
+    # Scale counts to a hypothetical population of 1000 for integer arithmetic
+    n_pos_a = int(1000 * params["pop_a_prevalence"])
+    n_neg_a = 1000 - n_pos_a
+
+    n_pos_b = int(1000 * params["pop_b_prevalence"])
+    n_neg_b = 1000 - n_pos_b
+
+    # 3. Vectorized Rate Calculation
+    # Calculate False Negative Rates (FNR) and False Positive Rates (FPR) for all candidate thresholds
+    # FNR = CDF(threshold | Positive Dist) -> Portion of positives below threshold
+    # FPR = 1 - CDF(threshold | Negative Dist) -> Portion of negatives above threshold
+
+    # Population A Rates
+    fnr_a = stats.norm.cdf(t_a_grid, loc=params["pop_a_mu_pos"], scale=params["pop_a_sigma_pos"])
+    fpr_a = 1 - stats.norm.cdf(
+        t_a_grid, loc=params["pop_a_mu_neg"], scale=params["pop_a_sigma_neg"]
+    )
+
+    # Population B Rates
+    fnr_b = stats.norm.cdf(t_b_grid, loc=params["pop_b_mu_pos"], scale=params["pop_b_sigma_pos"])
+    fpr_b = 1 - stats.norm.cdf(
+        t_b_grid, loc=params["pop_b_mu_neg"], scale=params["pop_b_sigma_neg"]
+    )
+
+    # 4. Cost Calculation
+    # Total Errors = (Count A * Rate A) + (Count B * Rate B)
+    total_fn = (n_pos_a * fnr_a) + (n_pos_b * fnr_b)
+    total_fp = (n_neg_a * fpr_a) + (n_neg_b * fpr_b)
+
+    # Weighted Cost
+    total_cost = (fn_weight * total_fn) + (fp_weight * total_fp)
+
+    # 5. Find Minimum
+    min_idx = np.argmin(total_cost)
+
+    return {
+        "threshold_a": float(t_a_grid[min_idx]),
+        "threshold_b": float(t_b_grid[min_idx]),
+        "min_cost": float(total_cost[min_idx]),
     }

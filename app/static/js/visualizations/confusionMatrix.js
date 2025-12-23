@@ -9,11 +9,23 @@ class ConfusionMatrixViz {
     this.containerB = document.getElementById(containerIdB);
     this.metricsA = document.getElementById(metricsIdA);
     this.metricsB = document.getElementById(metricsIdB);
+
+    // Optional Overall containers (for V3)
+    this.containerOverall = document.getElementById("confusion-matrix-overall");
+    this.metricsOverall = document.getElementById("metrics-overall");
   }
 
   update(data) {
     this.renderMatrix(this.containerA, this.metricsA, data.population_a);
     this.renderMatrix(this.containerB, this.metricsB, data.population_b);
+
+    if (this.containerOverall && data.overall) {
+      this.renderMatrix(
+        this.containerOverall,
+        this.metricsOverall,
+        data.overall
+      );
+    }
   }
 
   renderMatrix(container, metricsContainer, popData) {
