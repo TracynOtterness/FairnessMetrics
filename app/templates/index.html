@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fairness Metrics Visualizer | Understanding the Impossibility Theorem</title>
+    <meta name="description" content="Interactive visualization of algorithmic fairness metrics (PPV, NPV, FPR, FNR) and the Impossibility Theorem of Fairness">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <header class="header">
+        <h1>Fairness Metrics Visualizer</h1>
+        <p class="subtitle">Explore the Impossibility Theorem of Fairness through interactive visualization</p>
+    </header>
+
+    <main class="main-container">
+        <!-- Control Panel -->
+        <aside class="control-panel">
+            <div class="control-section">
+                <h2>Classification Threshold</h2>
+                <div class="slider-group threshold-slider">
+                    <label for="threshold">
+                        Threshold: <span id="threshold-value">50</span>
+                    </label>
+                    <input type="range" id="threshold" min="0" max="100" value="50" step="0.5">
+                </div>
+            </div>
+
+            <div class="control-section">
+                <h2>Population A</h2>
+                <div class="population-color pop-a"></div>
+                
+                <div class="slider-group">
+                    <label for="pop-a-prevalence">
+                        Prevalence: <span id="pop-a-prevalence-value">0.30</span>
+                    </label>
+                    <input type="range" id="pop-a-prevalence" min="0.01" max="0.99" value="0.30" step="0.01">
+                </div>
+                
+                <details class="distribution-details">
+                    <summary>Distribution Parameters</summary>
+                    <div class="detail-content">
+                        <h4>Positive (Truly Positive)</h4>
+                        <div class="slider-group">
+                            <label for="pop-a-mu-pos">
+                                μ: <span id="pop-a-mu-pos-value">65</span>
+                            </label>
+                            <input type="range" id="pop-a-mu-pos" min="0" max="100" value="65" step="1">
+                        </div>
+                        <div class="slider-group">
+                            <label for="pop-a-sigma-pos">
+                                σ: <span id="pop-a-sigma-pos-value">15</span>
+                            </label>
+                            <input type="range" id="pop-a-sigma-pos" min="1" max="30" value="15" step="0.5">
+                        </div>
+                        
+                        <h4>Negative (Truly Negative)</h4>
+                        <div class="slider-group">
+                            <label for="pop-a-mu-neg">
+                                μ: <span id="pop-a-mu-neg-value">35</span>
+                            </label>
+                            <input type="range" id="pop-a-mu-neg" min="0" max="100" value="35" step="1">
+                        </div>
+                        <div class="slider-group">
+                            <label for="pop-a-sigma-neg">
+                                σ: <span id="pop-a-sigma-neg-value">15</span>
+                            </label>
+                            <input type="range" id="pop-a-sigma-neg" min="1" max="30" value="15" step="0.5">
+                        </div>
+                    </div>
+                </details>
+            </div>
+
+            <div class="control-section">
+                <h2>Population B</h2>
+                <div class="population-color pop-b"></div>
+                
+                <div class="slider-group">
+                    <label for="pop-b-prevalence">
+                        Prevalence: <span id="pop-b-prevalence-value">0.50</span>
+                    </label>
+                    <input type="range" id="pop-b-prevalence" min="0.01" max="0.99" value="0.50" step="0.01">
+                </div>
+                
+                <details class="distribution-details">
+                    <summary>Distribution Parameters</summary>
+                    <div class="detail-content">
+                        <h4>Positive (Truly Positive)</h4>
+                        <div class="slider-group">
+                            <label for="pop-b-mu-pos">
+                                μ: <span id="pop-b-mu-pos-value">65</span>
+                            </label>
+                            <input type="range" id="pop-b-mu-pos" min="0" max="100" value="65" step="1">
+                        </div>
+                        <div class="slider-group">
+                            <label for="pop-b-sigma-pos">
+                                σ: <span id="pop-b-sigma-pos-value">15</span>
+                            </label>
+                            <input type="range" id="pop-b-sigma-pos" min="1" max="30" value="15" step="0.5">
+                        </div>
+                        
+                        <h4>Negative (Truly Negative)</h4>
+                        <div class="slider-group">
+                            <label for="pop-b-mu-neg">
+                                μ: <span id="pop-b-mu-neg-value">35</span>
+                            </label>
+                            <input type="range" id="pop-b-mu-neg" min="0" max="100" value="35" step="1">
+                        </div>
+                        <div class="slider-group">
+                            <label for="pop-b-sigma-neg">
+                                σ: <span id="pop-b-sigma-neg-value">15</span>
+                            </label>
+                            <input type="range" id="pop-b-sigma-neg" min="1" max="30" value="15" step="0.5">
+                        </div>
+                    </div>
+                </details>
+            </div>
+
+            <div class="control-section info-section">
+                <h2>About</h2>
+                <p>
+                    This tool visualizes the <strong>Impossibility Theorem of Fairness</strong> 
+                    (Chouldechova/Kleinberg): when base rates differ between populations, 
+                    you cannot simultaneously achieve equal PPV and equal FPR/FNR.
+                </p>
+                <p class="tip">
+                    💡 Try keeping distributions identical but changing prevalence to see the theorem in action.
+                </p>
+            </div>
+        </aside>
+
+        <!-- Visualization Area -->
+        <section class="visualization-area">
+            <!-- Bell Curves -->
+            <div class="viz-card bell-curves-card">
+                <h2>Risk Score Distributions</h2>
+                <div class="canvas-container">
+                    <canvas id="bell-curves-canvas"></canvas>
+                </div>
+                <div class="legend">
+                    <div class="legend-item">
+                        <span class="legend-color pop-a-pos"></span>
+                        <span>Pop A - Positive</span>
+                    </div>
+                    <div class="legend-item">
+                        <span class="legend-color pop-a-neg"></span>
+                        <span>Pop A - Negative</span>
+                    </div>
+                    <div class="legend-item">
+                        <span class="legend-color pop-b-pos"></span>
+                        <span>Pop B - Positive</span>
+                    </div>
+                    <div class="legend-item">
+                        <span class="legend-color pop-b-neg"></span>
+                        <span>Pop B - Negative</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Confusion Matrices -->
+            <div class="confusion-matrices-row">
+                <div class="viz-card confusion-matrix-card">
+                    <h2>Population A</h2>
+                    <div id="confusion-matrix-a" class="confusion-matrix"></div>
+                    <div id="metrics-a" class="metrics-display"></div>
+                </div>
+                <div class="viz-card confusion-matrix-card">
+                    <h2>Population B</h2>
+                    <div id="confusion-matrix-b" class="confusion-matrix"></div>
+                    <div id="metrics-b" class="metrics-display"></div>
+                </div>
+            </div>
+
+            <!-- Impossibility Theorem Visualization -->
+            <div class="viz-card impossibility-card">
+                <h2>Fairness Metric Comparison</h2>
+                <p class="viz-description">
+                    The bars show how each metric differs between populations. 
+                    When prevalence differs, balancing one metric causes others to diverge.
+                </p>
+                <div id="impossibility-viz" class="impossibility-container"></div>
+            </div>
+        </section>
+    </main>
+
+    <footer class="footer">
+        <p>Built to understand algorithmic fairness | 
+           <a href="https://en.wikipedia.org/wiki/Fairness_(machine_learning)" target="_blank" rel="noopener">Learn more about fairness in ML</a>
+        </p>
+    </footer>
+
+    <!-- Scripts -->
+    <script src="{{ url_for('static', filename='js/visualizations/bellCurves.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/visualizations/confusionMatrix.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/visualizations/impossibility.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/controls.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+</body>
+</html>
