@@ -44,6 +44,7 @@ def calculate():
             "pop_b_mu_neg": float(request.args.get("pop_b_mu_neg", 40)),  # Varied slightly
             "pop_b_sigma_neg": float(request.args.get("pop_b_sigma_neg", 12)),  # Varied slightly
             "pop_b_prevalence": float(request.args.get("pop_b_prevalence", 0.50)),
+            "distribution_type": request.args.get("distribution_type", "gaussian"),
         }
 
         # Validate ranges

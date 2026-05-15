@@ -25,6 +25,10 @@ class Controls {
       "pop-b-sigma-neg",
       "opt-fp-weight",
       "opt-fn-weight",
+      "opt-fpr-weight",
+      "opt-fnr-weight",
+      "opt-ppv-weight",
+      "opt-npv-weight",
     ];
 
     // Track Equal Threshold constraint separately
@@ -64,6 +68,87 @@ class Controls {
     if (this.btnOptimize) {
       this.btnOptimize.addEventListener("click", () => this.handleOptimize());
     }
+
+    // Case Studies Buttons
+    const btnGeneral = document.getElementById("btn-compas-general");
+    if (btnGeneral) btnGeneral.addEventListener("click", () => this.loadPreset("compas_general"));
+
+    const btnViolent = document.getElementById("btn-compas-violent");
+    if (btnViolent) btnViolent.addEventListener("click", () => this.loadPreset("compas_violent"));
+
+    const btnReset = document.getElementById("btn-reset-gaussian");
+    if (btnReset) btnReset.addEventListener("click", () => this.loadPreset("gaussian"));
+  }
+
+  loadPreset(type) {
+    this.distributionType = type;
+    
+    const isEmpirical = type !== "gaussian";
+    
+    // Disable/Enable distribution sliders
+    const distInputs = [
+      "pop-a-mu-pos", "pop-a-sigma-pos", "pop-a-mu-neg", "pop-a-sigma-neg",
+      "pop-b-mu-pos", "pop-b-sigma-pos", "pop-b-mu-neg", "pop-b-sigma-neg"
+    ];
+    
+    distInputs.forEach(id => {
+      const el = document.getElementById(id);
+      if (el) {
+        el.disabled = isEmpirical;
+        if (el.parentElement) {
+          el.parentElement.style.opacity = isEmpirical ? "0.5" : "1";
+        }
+      }
+    });
+
+    // Snap prevalence for COMPAS presets
+    if (type === "compas_general") {
+      this.updateSlider("pop-a-prevalence", 0.51);
+      this.updateSlider("pop-b-prevalence", 0.39);
+      this.updateSlider("threshold-a", 40);
+      this.updateSlider("threshold-b", 40);
+    } else if (type === "compas_violent") {
+      this.updateSlider("pop-a-prevalence", 0.21);
+      this.updateSlider("pop-b-prevalence", 0.12);
+      this.updateSlider("threshold-a", 40);
+      this.updateSlider("threshold-b", 40);
+    }
+
+    const labelA = isEmpirical ? "African-American" : "Population A";
+    const labelB = isEmpirical ? "Caucasian" : "Population B";
+
+    // Update Control Panel Titles
+    const titleA = document.getElementById("title-pop-a");
+    if (titleA) titleA.textContent = labelA;
+    const titleB = document.getElementById("title-pop-b");
+    if (titleB) titleB.textContent = labelB;
+
+    // Update Confusion Matrix Titles
+    const titleCmA = document.getElementById("title-cm-a");
+    if (titleCmA) titleCmA.textContent = labelA;
+    const titleCmB = document.getElementById("title-cm-b");
+    if (titleCmB) titleCmB.textContent = labelB;
+
+    // Update legend items
+    const legAPos = document.getElementById("leg-a-pos");
+    if (legAPos) legAPos.textContent = `${labelA} - Positive`;
+    const legANeg = document.getElementById("leg-a-neg");
+    if (legANeg) legANeg.textContent = `${labelA} - Negative`;
+    const legBPos = document.getElementById("leg-b-pos");
+    if (legBPos) legBPos.textContent = `${labelB} - Positive`;
+    const legBNeg = document.getElementById("leg-b-neg");
+    if (legBNeg) legBNeg.textContent = `${labelB} - Negative`;
+    
+    this.triggerUpdate();
+  }
+
+  updateSlider(id, value) {
+    const el = document.getElementById(id);
+    const display = document.getElementById(`${id}-value`);
+    if (el) {
+      el.value = value;
+      if (display) display.textContent = value;
+    }
   }
 
   async handleOptimize() {
@@ -75,6 +160,10 @@ class Controls {
       ...params,
       fp_weight: parseFloat(document.getElementById("opt-fp-weight").value),
       fn_weight: parseFloat(document.getElementById("opt-fn-weight").value),
+      w_fpr: parseFloat(document.getElementById("opt-fpr-weight").value),
+      w_fnr: parseFloat(document.getElementById("opt-fnr-weight").value),
+      w_ppv: parseFloat(document.getElementById("opt-ppv-weight").value),
+      w_npv: parseFloat(document.getElementById("opt-npv-weight").value),
       constraint_equal: this.optEqualThresholds
         ? this.optEqualThresholds.checked
         : true,
@@ -102,12 +191,16 @@ class Controls {
 
       if (sliderA) {
         sliderA.value = result.threshold_a;
-        sliderA.dispatchEvent(new Event("input")); // Updates display & triggers cycle
+        const displayA = document.getElementById("threshold-a-value");
+        if (displayA) displayA.textContent = Number(result.threshold_a).toFixed(1);
       }
       if (sliderB) {
         sliderB.value = result.threshold_b;
-        sliderB.dispatchEvent(new Event("input"));
+        const displayB = document.getElementById("threshold-b-value");
+        if (displayB) displayB.textContent = Number(result.threshold_b).toFixed(1);
       }
+      
+      this.triggerUpdate();
 
       console.log(`Optimization result: Cost ${result.min_cost}`);
     } catch (e) {
@@ -211,6 +304,7 @@ class Controls {
 
   getParams() {
     const params = {};
+    params["distribution_type"] = this.distributionType || "gaussian";
     this.inputs.forEach((id) => {
       const input = document.getElementById(id);
       if (input) {

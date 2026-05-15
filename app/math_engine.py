@@ -7,7 +7,19 @@ the Impossibility Theorem of Fairness.
 
 import numpy as np
 from scipy import stats
+from scipy.integrate import cumulative_trapezoid
+import json
+import os
 
+EMPIRICAL_DATA = None
+
+def load_empirical_data():
+    global EMPIRICAL_DATA
+    if EMPIRICAL_DATA is None:
+        path = os.path.join(os.path.dirname(__file__), "compas_empirical.json")
+        with open(path, "r") as f:
+            EMPIRICAL_DATA = json.load(f)
+    return EMPIRICAL_DATA
 
 def compute_rates(
     mu_pos: float, sigma_pos: float, mu_neg: float, sigma_neg: float, threshold: float
@@ -130,6 +142,63 @@ def generate_distribution_points(
     return {"x": x.tolist(), "y": y.tolist()}
 
 
+def compute_empirical_rates(hist: dict, threshold: float) -> float:
+    """
+    Compute rate (prob > threshold) by calculating the area under the 
+    linearly interpolated empirical continuous curve, matching the visualization.
+    """
+    # 1. Get the exact same x and y points as the visual curve
+    curve = generate_empirical_distribution_points(hist)
+    x_points = np.array(curve["x"])
+    y_points = np.array(curve["y"])
+    
+    # 2. Normalize so total area in the [0, 100] range is exactly 1.0
+    total_area = np.trapezoid(y_points, x_points)
+    
+    if total_area <= 0:
+        return 0.0
+        
+    y_points_norm = y_points / total_area
+    
+    # 3. Find area exactly above the threshold
+    mask = x_points >= threshold
+    if not np.any(mask):
+        return 0.0
+        
+    x_above = x_points[mask]
+    y_above = y_points_norm[mask]
+    
+    # Start integration exactly AT the threshold by interpolating the boundary
+    if x_above[0] > threshold:
+        y_thresh = np.interp(threshold, x_points, y_points_norm)
+        x_above = np.insert(x_above, 0, threshold)
+        y_above = np.insert(y_above, 0, y_thresh)
+        
+    area_above = np.trapezoid(y_above, x_above)
+    
+    return float(np.clip(area_above, 0.0, 1.0))
+
+
+def generate_empirical_distribution_points(hist: dict) -> dict:
+    """Generate smooth x,y points for an empirical histogram."""
+    centers = [(int(k) - 0.5) * 10 for k in hist.keys()]
+    probs = [hist[k] for k in hist.keys()]
+    
+    # Sort pairs
+    sorted_pairs = sorted(zip(centers, probs))
+    centers = [p[0] for p in sorted_pairs]
+    probs = [p[1] for p in sorted_pairs]
+    
+    # Add boundary points to make curve go to 0
+    centers = [-5.0] + centers + [105.0]
+    probs = [0.0] + probs + [0.0]
+    
+    x_points = np.linspace(0, 100, 200)
+    y_points = np.interp(x_points, centers, probs)
+    
+    return {"x": x_points.tolist(), "y": y_points.tolist()}
+
+
 def compute_all_metrics(params: dict) -> dict:
     """
     Compute all metrics for both populations given input parameters.
@@ -150,15 +219,60 @@ def compute_all_metrics(params: dict) -> dict:
     """
     threshold_a = params["threshold_a"]
     threshold_b = params["threshold_b"]
+    dist_type = params.get("distribution_type", "gaussian")
 
-    # Population A
-    rates_a = compute_rates(
-        params["pop_a_mu_pos"],
-        params["pop_a_sigma_pos"],
-        params["pop_a_mu_neg"],
-        params["pop_a_sigma_neg"],
-        threshold_a,
-    )
+    if dist_type in ("compas_general", "compas_violent"):
+        data = load_empirical_data()
+        subset = "general" if dist_type == "compas_general" else "violent"
+        
+        hist_a_pos = data[subset]["African-American"]["pos_hist"]
+        hist_a_neg = data[subset]["African-American"]["neg_hist"]
+        
+        hist_b_pos = data[subset]["Caucasian"]["pos_hist"]
+        hist_b_neg = data[subset]["Caucasian"]["neg_hist"]
+        
+        tpr_a = compute_empirical_rates(hist_a_pos, threshold_a)
+        fpr_a = compute_empirical_rates(hist_a_neg, threshold_a)
+        rates_a = {"tpr": tpr_a, "fpr": fpr_a, "tnr": 1 - fpr_a, "fnr": 1 - tpr_a}
+        
+        tpr_b = compute_empirical_rates(hist_b_pos, threshold_b)
+        fpr_b = compute_empirical_rates(hist_b_neg, threshold_b)
+        rates_b = {"tpr": tpr_b, "fpr": fpr_b, "tnr": 1 - fpr_b, "fnr": 1 - tpr_b}
+        
+        curves_a = {
+            "positive": generate_empirical_distribution_points(hist_a_pos),
+            "negative": generate_empirical_distribution_points(hist_a_neg),
+        }
+        curves_b = {
+            "positive": generate_empirical_distribution_points(hist_b_pos),
+            "negative": generate_empirical_distribution_points(hist_b_neg),
+        }
+    else:
+        # Population A (Gaussian)
+        rates_a = compute_rates(
+            params["pop_a_mu_pos"],
+            params["pop_a_sigma_pos"],
+            params["pop_a_mu_neg"],
+            params["pop_a_sigma_neg"],
+            threshold_a,
+        )
+        # Population B (Gaussian)
+        rates_b = compute_rates(
+            params["pop_b_mu_pos"],
+            params["pop_b_sigma_pos"],
+            params["pop_b_mu_neg"],
+            params["pop_b_sigma_neg"],
+            threshold_b,
+        )
+        curves_a = {
+            "positive": generate_distribution_points(params["pop_a_mu_pos"], params["pop_a_sigma_pos"]),
+            "negative": generate_distribution_points(params["pop_a_mu_neg"], params["pop_a_sigma_neg"]),
+        }
+        curves_b = {
+            "positive": generate_distribution_points(params["pop_b_mu_pos"], params["pop_b_sigma_pos"]),
+            "negative": generate_distribution_points(params["pop_b_mu_neg"], params["pop_b_sigma_neg"]),
+        }
+
     pv_a = compute_predictive_values(
         rates_a["tpr"], rates_a["fpr"], rates_a["tnr"], rates_a["fnr"], params["pop_a_prevalence"]
     )
@@ -166,30 +280,12 @@ def compute_all_metrics(params: dict) -> dict:
         rates_a["tpr"], rates_a["fpr"], rates_a["tnr"], rates_a["fnr"], params["pop_a_prevalence"]
     )
 
-    # Population B
-    rates_b = compute_rates(
-        params["pop_b_mu_pos"],
-        params["pop_b_sigma_pos"],
-        params["pop_b_mu_neg"],
-        params["pop_b_sigma_neg"],
-        threshold_b,
-    )
     pv_b = compute_predictive_values(
         rates_b["tpr"], rates_b["fpr"], rates_b["tnr"], rates_b["fnr"], params["pop_b_prevalence"]
     )
     cm_b = compute_confusion_matrix(
         rates_b["tpr"], rates_b["fpr"], rates_b["tnr"], rates_b["fnr"], params["pop_b_prevalence"]
     )
-
-    # Distribution curves for plotting
-    curves_a = {
-        "positive": generate_distribution_points(params["pop_a_mu_pos"], params["pop_a_sigma_pos"]),
-        "negative": generate_distribution_points(params["pop_a_mu_neg"], params["pop_a_sigma_neg"]),
-    }
-    curves_b = {
-        "positive": generate_distribution_points(params["pop_b_mu_pos"], params["pop_b_sigma_pos"]),
-        "negative": generate_distribution_points(params["pop_b_mu_neg"], params["pop_b_sigma_neg"]),
-    }
 
     # Overall Confusion Matrix
     cm_overall = {
@@ -253,80 +349,112 @@ def compute_all_metrics(params: dict) -> dict:
 
 
 def optimize_thresholds(params: dict) -> dict:
-    """
-    Find thresholds that minimize weighted error cost using a vectorized grid search.
-
-    Cost Function:
-        Cost = (fp_weight * total_FP) + (fn_weight * total_FN)
-
-    The function performs a grid search over potential thresholds (0 to 100, step 0.5).
-    It uses vectorized NumPy/SciPy operations for efficiency, calculating the cost
-    for all candidate thresholds simultaneously.
-
-    Args:
-        params: Dictionary containing:
-            - fp_weight: Cost weight for False Positives (default 1.0)
-            - fn_weight: Cost weight for False Negatives (default 1.0)
-            - constraint_equal: If True, forces threshold_a == threshold_b (default True)
-            - Population distribution parameters (mu, sigma, prevalence for A and B)
-
-    Returns:
-        Dictionary with optimal thresholds and the minimum cost found.
-    """
     fp_weight = params.get("fp_weight", 1.0)
     fn_weight = params.get("fn_weight", 1.0)
     constraint_equal = params.get("constraint_equal", True)
 
+    # Equity weights
+    w_fpr = params.get("w_fpr", 0.0)
+    w_fnr = params.get("w_fnr", 0.0)
+    w_ppv = params.get("w_ppv", 0.0)
+    w_npv = params.get("w_npv", 0.0)
+
     # 1. Define Search Space
-    # Search from 0 to 100 with step 0.5
     steps = np.arange(0, 100.5, 0.5)
 
-    # Create coordinate grids for threshold candidates
     if constraint_equal:
-        # If constrained, thresholds must be equal (t_a = t_b)
         t_a_grid = steps
         t_b_grid = steps
     else:
-        # If independent, search the full 2D space (t_a x t_b)
-        # meshgrid creates 2D arrays of all possible combinations
         t_a_grid, t_b_grid = np.meshgrid(steps, steps)
         t_a_grid = t_a_grid.flatten()
         t_b_grid = t_b_grid.flatten()
 
-    # 2. Calculate Population Sizes
-    # Scale counts to a hypothetical population of 1000 for integer arithmetic
-    n_pos_a = int(1000 * params["pop_a_prevalence"])
-    n_neg_a = 1000 - n_pos_a
+    prev_a = params.get("pop_a_prevalence", 0.5)
+    prev_b = params.get("pop_b_prevalence", 0.5)
 
-    n_pos_b = int(1000 * params["pop_b_prevalence"])
-    n_neg_b = 1000 - n_pos_b
+    dist_type = params.get("distribution_type", "gaussian")
 
-    # 3. Vectorized Rate Calculation
-    # Calculate False Negative Rates (FNR) and False Positive Rates (FPR) for all candidate thresholds
-    # FNR = CDF(threshold | Positive Dist) -> Portion of positives below threshold
-    # FPR = 1 - CDF(threshold | Negative Dist) -> Portion of negatives above threshold
+    if dist_type in ("compas_general", "compas_violent"):
+        data = load_empirical_data()
+        subset = "general" if dist_type == "compas_general" else "violent"
+        
+        hist_a_pos = data[subset]["African-American"]["pos_hist"]
+        hist_a_neg = data[subset]["African-American"]["neg_hist"]
+        hist_b_pos = data[subset]["Caucasian"]["pos_hist"]
+        hist_b_neg = data[subset]["Caucasian"]["neg_hist"]
 
-    # Population A Rates
-    fnr_a = stats.norm.cdf(t_a_grid, loc=params["pop_a_mu_pos"], scale=params["pop_a_sigma_pos"])
-    fpr_a = 1 - stats.norm.cdf(
-        t_a_grid, loc=params["pop_a_mu_neg"], scale=params["pop_a_sigma_neg"]
+        def get_empirical_cdf(hist):
+            curve = generate_empirical_distribution_points(hist)
+            x = np.array(curve["x"])
+            y = np.array(curve["y"])
+            area = np.trapezoid(y, x)
+            if area > 0:
+                y = y / area
+            cdf = cumulative_trapezoid(y, x, initial=0)
+            return x, cdf
+
+        x_a_pos, cdf_a_pos = get_empirical_cdf(hist_a_pos)
+        x_a_neg, cdf_a_neg = get_empirical_cdf(hist_a_neg)
+        x_b_pos, cdf_b_pos = get_empirical_cdf(hist_b_pos)
+        x_b_neg, cdf_b_neg = get_empirical_cdf(hist_b_neg)
+
+        fnr_a = np.interp(t_a_grid, x_a_pos, cdf_a_pos)
+        fpr_a = 1 - np.interp(t_a_grid, x_a_neg, cdf_a_neg)
+        fnr_b = np.interp(t_b_grid, x_b_pos, cdf_b_pos)
+        fpr_b = 1 - np.interp(t_b_grid, x_b_neg, cdf_b_neg)
+
+    else:
+        # Gaussian rates
+        fnr_a = stats.norm.cdf(t_a_grid, loc=params["pop_a_mu_pos"], scale=params["pop_a_sigma_pos"])
+        fpr_a = 1 - stats.norm.cdf(t_a_grid, loc=params["pop_a_mu_neg"], scale=params["pop_a_sigma_neg"])
+        fnr_b = stats.norm.cdf(t_b_grid, loc=params["pop_b_mu_pos"], scale=params["pop_b_sigma_pos"])
+        fpr_b = 1 - stats.norm.cdf(t_b_grid, loc=params["pop_b_mu_neg"], scale=params["pop_b_sigma_neg"])
+
+    tpr_a = 1 - fnr_a
+    tpr_b = 1 - fnr_b
+    tnr_a = 1 - fpr_a
+    tnr_b = 1 - fpr_b
+
+    # PPV = (TPR * prev) / (TPR * prev + FPR * (1 - prev))
+    num_ppv_a = tpr_a * prev_a
+    den_ppv_a = num_ppv_a + fpr_a * (1 - prev_a)
+    ppv_a = np.divide(num_ppv_a, den_ppv_a, out=np.zeros_like(num_ppv_a), where=den_ppv_a!=0)
+
+    num_ppv_b = tpr_b * prev_b
+    den_ppv_b = num_ppv_b + fpr_b * (1 - prev_b)
+    ppv_b = np.divide(num_ppv_b, den_ppv_b, out=np.zeros_like(num_ppv_b), where=den_ppv_b!=0)
+
+    # NPV = (TNR * (1-prev)) / (TNR * (1-prev) + FNR * prev)
+    num_npv_a = tnr_a * (1 - prev_a)
+    den_npv_a = num_npv_a + fnr_a * prev_a
+    npv_a = np.divide(num_npv_a, den_npv_a, out=np.zeros_like(num_npv_a), where=den_npv_a!=0)
+
+    num_npv_b = tnr_b * (1 - prev_b)
+    den_npv_b = num_npv_b + fnr_b * prev_b
+    npv_b = np.divide(num_npv_b, den_npv_b, out=np.zeros_like(num_npv_b), where=den_npv_b!=0)
+
+    # Calculate overall rates
+    n_pos_a = prev_a * 1000
+    n_neg_a = (1 - prev_a) * 1000
+    n_pos_b = prev_b * 1000
+    n_neg_b = (1 - prev_b) * 1000
+
+    overall_fpr = (fpr_a * n_neg_a + fpr_b * n_neg_b) / (n_neg_a + n_neg_b)
+    overall_fnr = (fnr_a * n_pos_a + fnr_b * n_pos_b) / (n_pos_a + n_pos_b)
+
+    # Option 1 Math: Normalized Error + Equity Penalty
+    norm_error = (fp_weight * overall_fpr) + (fn_weight * overall_fnr)
+
+    equity_penalty = (
+        (w_fpr * np.abs(fpr_a - fpr_b)) +
+        (w_fnr * np.abs(fnr_a - fnr_b)) +
+        (w_ppv * np.abs(ppv_a - ppv_b)) +
+        (w_npv * np.abs(npv_a - npv_b))
     )
 
-    # Population B Rates
-    fnr_b = stats.norm.cdf(t_b_grid, loc=params["pop_b_mu_pos"], scale=params["pop_b_sigma_pos"])
-    fpr_b = 1 - stats.norm.cdf(
-        t_b_grid, loc=params["pop_b_mu_neg"], scale=params["pop_b_sigma_neg"]
-    )
+    total_cost = norm_error + equity_penalty
 
-    # 4. Cost Calculation
-    # Total Errors = (Count A * Rate A) + (Count B * Rate B)
-    total_fn = (n_pos_a * fnr_a) + (n_pos_b * fnr_b)
-    total_fp = (n_neg_a * fpr_a) + (n_neg_b * fpr_b)
-
-    # Weighted Cost
-    total_cost = (fn_weight * total_fn) + (fp_weight * total_fp)
-
-    # 5. Find Minimum
     min_idx = np.argmin(total_cost)
 
     return {
